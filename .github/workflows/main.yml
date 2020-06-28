@@ -1,0 +1,122 @@
+name: Push to Docker Hub
+
+on:
+  push:
+    branches:
+    - master
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        arch:
+        - linux/amd64
+        - linux/arm/v7
+        - linux/arm64
+
+    steps:
+    - name: Extract names
+      id: extract
+      run: |
+        set -eu
+        BRANCH="$(echo ${{ github.ref }} | sed -r 's/refs\/heads\/(.*)/\1/')"
+        PARENT_BRANCH="$(echo $BRANCH | sed -r 's/(.*)-arm/\1/')"
+        ARCH_SNAKECASE="$(echo '${{ matrix.arch }}' | sed -r 's/\//_/g')"
+        DOCKER_TAG="$PARENT_BRANCH-$ARCH_SNAKECASE"
+        DOCKER_CACHE_REPO="satackey/softethervpn"
+        DOKCER_CACHE_TAG="$PARENT_BRANCH-$ARCH_SNAKECASE"
+        DOCKER_CACHE_IMAGE="$DOCKER_CACHE_REPO:$DOKCER_CACHE_TAG"
+        if [ $PARENT_BRANCH = "master" ];then
+          DOCKER_TAG=latest
+        fi
+        DOCKER_CACHE_PATH=${PWD}/.docker-build-cache
+        UNIXTIME="$(date +%s)"
+        echo "##[set-output name=branch;]$BRANCH"
+        echo "##[set-output name=arch-snakecase;]$ARCH_SNAKECASE"
+        echo "##[set-output name=docker-tag;]$DOCKER_TAG"
+        echo "##[set-output name=docker-cache-repo;]$DOCKER_CACHE_REPO"
+        echo "##[set-output name=docker-cache-tag;]$DOKCER_CACHE_TAG"
+        echo "##[set-output name=docker-cache-image;]$DOCKER_CACHE_IMAGE"
+        echo "##[set-output name=docker-cache-path;]$DOCKER_CACHE_PATH"
+        echo "##[set-output name=unixtime;]$UNIXTIME"
+    - name: Set up Docker Buildx
+      uses: crazy-max/ghaction-docker-buildx@v1
+      with:
+        version: latest
+
+    - uses: actions/checkout@v2
+
+    - name: Login to Docker Hub
+      run: |
+        set -eux
+        docker login -u satackey -p ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Restore Docker build cache
+      uses: actions/cache@v1
+      with:
+        path: ${{ steps.extract.outputs.docker-cache-path }}
+        key: docker-buildx-${{ steps.extract.outputs.arch-snakecase }}-${{ github.sha }}
+        restore-keys: |
+          docker-buildx-${{ steps.extract.outputs.arch-snakecase }}-
+
+    - name: Build and push Docker image
+      run: |
+        set -eux
+        DOCKER_ARG_CACHE_FROM=""
+        if [ -e ${{ steps.extract.outputs.docker-cache-path }}/index.json ];then
+          DOCKER_ARG_CACHE_FROM="--cache-from type=local,src=${{ steps.extract.outputs.docker-cache-path }}"
+        fi
+        docker buildx build \
+          --platform ${{ matrix.arch }} \
+          --output "type=image,push=true" \
+          --file Dockerfile \
+          $DOCKER_ARG_CACHE_FROM \
+          --cache-to type=local,mode=max,dest=${{ steps.extract.outputs.docker-cache-path }} \
+          -t ${{ steps.extract.outputs.docker-cache-image }} \
+          .
+  push_multiarch_tag:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Extract names
+      id: extract
+      run: |
+        set -eu
+        BRANCH="$(echo ${{ github.ref }} | sed -r 's/refs\/heads\/(.*)/\1/')"
+        PARENT_BRANCH="$(echo $BRANCH | sed -r 's/(.*)-arm/\1/')"
+        ARCH_SNAKECASE="$(echo '${{ matrix.arch }}' | sed -r 's/\//_/g')"
+        DOCKER_TAG="$PARENT_BRANCH-$ARCH_SNAKECASE"
+        DOCKER_CACHE_REPO="satackey/softethervpn"
+        DOKCER_CACHE_TAG="$PARENT_BRANCH-$ARCH_SNAKECASE"
+        DOCKER_CACHE_IMAGE="$DOCKER_CACHE_REPO:$DOKCER_CACHE_TAG"
+        if [ $PARENT_BRANCH = "master" ];then
+          DOCKER_TAG=latest
+        fi
+        DOCKER_CACHE_PATH=${PWD}/.docker-build-cache
+        UNIXTIME="$(date +%s)"
+        echo "##[set-output name=branch;]$BRANCH"
+        echo "##[set-output name=arch-snakecase;]$ARCH_SNAKECASE"
+        echo "##[set-output name=docker-tag;]$DOCKER_TAG"
+        echo "##[set-output name=docker-cache-repo;]$DOCKER_CACHE_REPO"
+        echo "##[set-output name=docker-cache-tag;]$DOKCER_CACHE_TAG"
+        echo "##[set-output name=docker-cache-image;]$DOCKER_CACHE_IMAGE"
+        echo "##[set-output name=docker-cache-path;]$DOCKER_CACHE_PATH"
+        echo "##[set-output name=unixtime;]$UNIXTIME"
+    - name: Set up Docker Buildx
+      uses: crazy-max/ghaction-docker-buildx@v1
+      with:
+        version: latest
+
+    - name: Login to Docker Hub
+      run: |
+        set -eux
+        docker login -u satackey -p ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Create multiarch tag
+      run: |
+        set -eux
+        PUSH_IMAGE='${{ steps.extract.outputs.docker-push-image }}'
+        CACHED_IMAGE='${{ steps.extract.outputs.docker-cache-image }}'
+        docker buildx imagetools create -t $PUSH_IMAGE \
+          ${CACHED_IMAGE}linux_amd64 \
+          ${CACHED_IMAGE}linux_arm_v7 \
+          ${CACHED_IMAGE}linux_arm64
