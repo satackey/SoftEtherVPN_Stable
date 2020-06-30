@@ -1,0 +1,3 @@
+[submodule "upstream_commit"]
+	path = upstream_commit
+	url = https://github.com/SoftEtherVPN/SoftEtherVPN_Stable.git
